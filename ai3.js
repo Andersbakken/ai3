@@ -5,46 +5,50 @@ const net = require('net');
 const fs = require('fs');
 const safe = require('safetydance');
 const args = require('minimist')(process.argv.slice(1));
-const i3 = require('i3');
-const path = require('path');
+// const i3 = require('i3');
+const I3 = require('@jhanssen/i3');
 
-var stack = [];
-const client = i3.createClient();
-client.on('window', (w) => {
-    if (w.change == 'focus' && (!stack.length || w.container.id != stack[stack.length - 1].con_id)) {
-        while (stack.length >= 10)
-            stack.splice(0, 1);
-        if (stack.length) {
-            fs.writeFile(path.join(process.env.HOME, ".i3lastwindow"), stack[stack.length - 1].con_id);
-        }
-        stack.push({con_id: w.container.id, class: w.container.window_properties.class, title: w.container.window_properties.title});
-    }
+const socketPath = args["socket-path"] || "/tmp/ai3.sock";
+
+const i3 = new I3();
+
+// init(opts, config);
+
+var focusChain = [];
+i3.open().then(() => {
+    // console.log("open");
+    // i3.on("workspace", ws => {
+    //     // console.log("ws event", ws);
+    //     const wss = ws.current;
+    //     switch (ws.change) {
+    //     case "init":
+    //         // add
+    //         // workspaces.elements[wss.num] = { name: wss.name, output: wss.output, rect: wss.rect };
+    //         // recreate(opts);
+    //         break;
+    //     case "empty":
+    //         // delete workspaces.elements[wss.num];
+    //         // recreate(opts);
+    //         break;
+    //     case "focus":
+    //         // workspaces.focused = wss.num;
+    //         break;
+    //     }
+    //     // reselect(opts);
+    // });
+    i3.on("window", (w) => {
+        while (focusChain.length >= 100)
+            focusChain.splice(0, 1);
+        // focusChain.push({id: w.container.id, "class": w.container.window_properties["class"], title: w.container.window_properties.title});
+        focusChain.push(w.container.id);
+    });
+}).catch(err => {
+    console.error(err);
 });
-
-process.on('message', (msg) => {
-    if (msg.topic == 'process:msg') {
-        if (typeof msg.data === 'number') {
-            var num;
-            if (msg.data < 0) {
-                num = stack.length + msg.data;
-            } else {
-                num = msg.data;
-            }
-            if (num >= 0 && num < stack.length) {
-                client.command(`[con_id="${stack[num].con_id}"] focus`);
-            }
-        } else {
-            console.error("Bad arg");
-            return;
-        }
-    }
-});
-
 
 function clearSocketPath()
 {
-    const path = args["socket-path"] || "/tmp/ai3.sock";
-    safe.fs.unlinkSync(path);
+    safe.fs.unlinkSync(socketPath);
 }
 
 process.on('SIGINT', () => {
@@ -58,6 +62,89 @@ process.on('EXIT', () => {
     // console.log("GOT EXIT");
 });
 
+function handleApplicationMessage(msg)
+{
+    if (msg.last) {
+        if (focusChain.length > 1) {
+            i3.send(new I3.Message("COMMAND", `[con_id=${focusChain[focusChain.length - 2]}] focus`)).then(console.log);
+        }
+        return;
+    }
+    i3.send("GET_TREE").then((tree) => {
+        // console.log(typeof tree, Object.keys(tree));
+        function match(needle, haystack)
+        {
+            if (needle instanceof Array) {
+                for (let i=0; i<needle.length; ++i) {
+                    if (match(needle[i], haystack))
+                        return true;
+                }
+                return false;
+            } else {
+                return needle == haystack;
+            }
+
+        }
+
+        let matches = [];
+        function recurse(node) {
+            // console.log(node.type, node.name, node.window_properties);
+            if (node.type == 'con' && node.window_properties) {
+                if (msg.list
+                    || match(msg["class"], node.window_properties["class"])
+                    || match(msg["instance"], node.window_properties["instance"])) {
+                    matches.push({ id: node.id,
+                                   "class": node.window_properties["class"],
+                                   instance: node.window_properties.instance,
+                                   title: node.window_properties.title,
+                                   name: node.name,
+                                   focused: node.focused });
+                }
+            }
+            node.nodes.forEach(recurse);
+            node.floating_nodes.forEach(recurse);
+        }
+        recurse(tree);
+        // console.log(containers);
+        if (msg.list) {
+            console.log(matches);
+        } else if (matches.length) {
+            var focus;
+            console.log(matches);
+            if (matches.length > 1) {
+                var ids = {};
+                for (let i=0; i<matches.length; ++i) {
+                    if (matches[i].focused) {
+                        focus = matches[i + 1 % matches.length].id;
+                        break;
+                    } else {
+                        ids[matches[i].id] = true;
+                    }
+                }
+                if (focus === undefined) {
+                    // console.log(focusChain);
+                    for (let i=focusChain.length - 1; i>=0; --i) {
+                        if (focusChain[i] in ids) {
+                            focus = focusChain[i];
+                            break;
+                        }
+                    }
+                    if (focus === undefined)
+                        focus = matches[0].id;
+                }
+            } else {
+                focus = matches[0].id;
+            }
+            // console.log(focus);
+            // console.log("sending command", "COMMAND", `[con_id: ${focus}] focus`);
+            i3.send(new I3.Message("COMMAND", `[con_id=${focus}] focus`)).then(console.log);
+        } else if (message.spawn) {
+            child_process.spawn(msg.spawn.command, msg.spawn.args, msg.spawn.options);
+        }
+        // console.log(JSON.stringify(tree, null, 4));
+    });
+}
+
 function handleMessage(msg)
 {
     let message = safe.JSON.parse(msg);
@@ -66,6 +153,14 @@ function handleMessage(msg)
         return;
     }
     console.log("handle message", message);
+    switch (message.type) {
+    case 'application':
+        handleApplicationMessage(message);
+        break;
+    case 'quit':
+        process.exit();
+        break;
+    }
 }
 
 let server;
@@ -115,11 +210,13 @@ function serverCallback(socket)
     socket.pipe(socket);
 }
 
+var client = net.createConnection(socketPath);
+
 function startServer()
 {
-    console.log("startServer");
-    const path = args["socket-path"] || "/tmp/ai3.sock";
-    safe.fs.unlinkSync(path);
+    // console.log("startServer");
+    clearSocketPath();
+    // safe.fs.unlinkSync(socketPath);
     server = net.createServer(serverCallback);
     server.on('err', function(err) {
         console.log(err);
@@ -128,15 +225,19 @@ function startServer()
 
     // console.log("balls");
     try {
-        server.listen(path);
+        server.listen(socketPath);
     } catch (err) {
         // console.log("balls");
-        console.error("Failed to listen on ", path);
-        safe.fs.unlinkSync(path);
+        console.error("Failed to listen on ", socketPath, err);
+        safe.fs.unlinkSync(socketPath);
         setTimeout(startServer, 1000);
     }
 }
 
-startServer();
-
-console.log(args);
+client.on('close', startServer);
+client.on('error', function() {});
+client.on('connect', function() {
+    // console.log("got connect");
+    client.write(JSON.stringify({type: 'quit'}) + "\n");
+    client.pipe(client);
+});
