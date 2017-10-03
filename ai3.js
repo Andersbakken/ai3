@@ -64,12 +64,6 @@ process.on('EXIT', () => {
 
 function handleApplicationMessage(msg)
 {
-    if (msg.last) {
-        if (focusChain.length > 1) {
-            i3.send(new I3.Message("COMMAND", `[con_id=${focusChain[focusChain.length - 2]}] focus`)).then(console.log);
-        }
-        return;
-    }
     i3.send("GET_TREE").then((tree) => {
         // console.log(typeof tree, Object.keys(tree));
         function match(needle, haystack)
@@ -91,6 +85,7 @@ function handleApplicationMessage(msg)
             // console.log(node.type, node.name, node.window_properties);
             if (node.type == 'con' && node.window_properties) {
                 if (msg.list
+                    || msg.last
                     || match(msg["class"], node.window_properties["class"])
                     || match(msg["instance"], node.window_properties["instance"])) {
                     matches.push({ id: node.id,
@@ -108,11 +103,26 @@ function handleApplicationMessage(msg)
         // console.log(containers);
         if (msg.list) {
             console.log(matches);
+        } else if (msg.last) {
+            let ids = {};
+            for (let i=0; i<matches.length; ++i) {
+                ids[matches[i].id] = true;
+            }
+
+            for (var i=focusChain.length - 2; i>=0; --i) {
+                if (focusChain[i] in ids) {
+                    i3.send(new I3.Message("COMMAND", `[con_id=${focusChain[i]}] focus`)).then(console.log);
+                    console.log(`sending focus to ${focusChain[i]}`);
+                    return;
+                }
+            }
+            console.log("Couldn't find anyone to focus");
+            return;
         } else if (matches.length) {
-            var focus;
+            let focus;
             console.log(matches);
             if (matches.length > 1) {
-                var ids = {};
+                let ids = {};
                 for (let i=0; i<matches.length; ++i) {
                     if (matches[i].focused) {
                         focus = matches[(i + 1) % matches.length].id;
@@ -187,7 +197,7 @@ function serverCallback(socket)
         // console.log('[socket on data]', data, msg);
     });
     socket.on('end', () => {
-        console.log("got end");
+        // console.log("got end");
         // emitted when the other end sends a FIN packet
     });
 
@@ -203,7 +213,7 @@ function serverCallback(socket)
         console.log("got error", err);
     });
     socket.on('close', () => {
-        console.log("got close");
+        // console.log("got close");
     });
 
     // socket.on('close', log('socket', 'close'));
