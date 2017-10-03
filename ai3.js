@@ -115,7 +115,7 @@ function handleApplicationMessage(msg)
                 var ids = {};
                 for (let i=0; i<matches.length; ++i) {
                     if (matches[i].focused) {
-                        focus = matches[i + 1 % matches.length].id;
+                        focus = matches[(i + 1) % matches.length].id;
                         break;
                     } else {
                         ids[matches[i].id] = true;
