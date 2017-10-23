@@ -15,6 +15,80 @@ const i3 = new I3();
 
 // init(opts, config);
 
+function recurse(msg, node, workspace) {
+    function match(needle, haystack)
+    {
+        if (needle instanceof Array) {
+            for (let i=0; i<needle.length; ++i) {
+                if (match(needle[i], haystack))
+                    return true;
+            }
+            return false;
+        } else {
+            return needle == haystack;
+        }
+
+    }
+
+    var ret;
+    // console.log(node.type, node.name, node.window_properties);
+    if (node.type == 'workspace') {
+        // console.log("got workspace", node.name, node.focused);
+        workspace = node.name;
+    } else if (node.type == 'con' && node.window_properties) {
+        if (msg.conid == node.id
+            || msg.list
+            || msg.last
+            || match(msg["class"], node.window_properties["class"])
+            || match(msg["instance"], node.window_properties["instance"])) {
+            ret = [ { id: node.id,
+                      "class": node.window_properties["class"],
+                      workspace: workspace,
+                      instance: node.window_properties.instance,
+                      title: node.window_properties.title,
+                      name: node.name,
+                      focused: node.focused } ];
+        }
+    }
+    function add(result) {
+        if (result) {
+            if (!ret) {
+                ret = result;
+            } else {
+                ret = ret.concat(result);
+            }
+        }
+    }
+    for (var i=0; i<node.nodes.length; ++i)
+        add(recurse(msg, node.nodes[i], workspace));
+    for (var i=0; i<node.floating_nodes.length; ++i)
+        add(recurse(msg, node.floating_nodes[i], workspace));
+
+    return ret;
+}
+
+function isReallyFocused(conid)
+{
+    // console.log("calling isReallyFocused", conid);
+    return Promise.all([i3.send("GET_TREE"), i3.send("GET_WORKSPACES")]).then((results) => {
+        var matches = recurse({conid: conid}, results[0]);
+        if (matches && matches.length == 1 && matches[0].workspace) {
+            for (var i=0; i<results[1].length; ++i) {
+                if (matches[0].workspace === results[1][i].name) {
+                    return results[1][i].visible;
+                }
+            }
+        }
+        console.log("got matches", matches);
+        // fs.writeFileSync("tree", JSON.stringify(results[0], null, 4));
+        // fs.writeFileSync("workspaces", JSON.stringify(results[1], null, 4));
+        // console.log(results.length);
+        return false;
+    }).catch((err) => {
+        console.log("caught something", err.stack);
+    });
+}
+
 var focusChain = [];
 i3.open().then(() => {
     // console.log("open");
@@ -41,8 +115,21 @@ i3.open().then(() => {
         while (focusChain.length >= 100)
             focusChain.splice(0, 1);
         // focusChain.push({id: w.container.id, "class": w.container.window_properties["class"], title: w.container.window_properties.title});
-        focusChain.push(w.container.id);
+        if (!focusChain.length || w.container.id != focusChain[focusChain.length - 1]) {
+            isReallyFocused(w.container.id).then((visible) => {
+                if (visible) {
+                    console.log(w.container.window_properties["class"], "is visible");
+                    focusChain.push(w.container.id);
+                } else {
+                    console.log(w.class, "is not visible");
+                }
+            });
+        }
+        // console.log("got shit", w);
     });
+    // i3.on("workspace", (w) => {
+    //     console.log("got workspace", w);
+    // });
 }).catch(err => {
     console.error(err);
 });
@@ -67,40 +154,7 @@ function handleApplicationMessage(msg)
 {
     i3.send("GET_TREE").then((tree) => {
         // console.log(typeof tree, Object.keys(tree));
-        function match(needle, haystack)
-        {
-            if (needle instanceof Array) {
-                for (let i=0; i<needle.length; ++i) {
-                    if (match(needle[i], haystack))
-                        return true;
-                }
-                return false;
-            } else {
-                return needle == haystack;
-            }
-
-        }
-
-        let matches = [];
-        function recurse(node) {
-            // console.log(node.type, node.name, node.window_properties);
-            if (node.type == 'con' && node.window_properties) {
-                if (msg.list
-                    || msg.last
-                    || match(msg["class"], node.window_properties["class"])
-                    || match(msg["instance"], node.window_properties["instance"])) {
-                    matches.push({ id: node.id,
-                                   "class": node.window_properties["class"],
-                                   instance: node.window_properties.instance,
-                                   title: node.window_properties.title,
-                                   name: node.name,
-                                   focused: node.focused });
-                }
-            }
-            node.nodes.forEach(recurse);
-            node.floating_nodes.forEach(recurse);
-        }
-        recurse(tree);
+        var matches = recurse(msg, tree);
         // console.log(containers);
         if (msg.list) {
             console.log(matches);
@@ -153,6 +207,8 @@ function handleApplicationMessage(msg)
             child_process.spawn(msg.spawn.command, msg.spawn.args, msg.spawn.options);
         }
         // console.log(JSON.stringify(tree, null, 4));
+    }).catch((err) => {
+        console.log("Caught an error", err);
     });
 }
 
