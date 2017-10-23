@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-/* global process, require */
+/* global process, require, setTimeout */
 
 const net = require('net');
 const fs = require('fs');
 const safe = require('safetydance');
+const child_process = require('child_process');
 const args = require('minimist')(process.argv.slice(1));
 // const i3 = require('i3');
 const I3 = require('@jhanssen/i3');
@@ -148,7 +149,7 @@ function handleApplicationMessage(msg)
             // console.log(focus);
             // console.log("sending command", "COMMAND", `[con_id: ${focus}] focus`);
             i3.send(new I3.Message("COMMAND", `[con_id=${focus}] focus`)).then(console.log);
-        } else if (message.spawn) {
+        } else if (msg.spawn) {
             child_process.spawn(msg.spawn.command, msg.spawn.args, msg.spawn.options);
         }
         // console.log(JSON.stringify(tree, null, 4));
