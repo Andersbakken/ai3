@@ -6,7 +6,6 @@ const fs = require('fs');
 const safe = require('safetydance');
 const child_process = require('child_process');
 const args = require('minimist')(process.argv.slice(1));
-// const i3 = require('i3');
 const I3 = require('@jhanssen/i3');
 
 const socketPath = args["socket-path"] || "/tmp/ai3.sock";
