@@ -7,6 +7,7 @@ const safe = require('safetydance');
 const child_process = require('child_process');
 const args = require('minimist')(process.argv.slice(1));
 const I3 = require('@jhanssen/i3');
+const readline = require('readline');
 
 const socketPath = args["socket-path"] || "/tmp/ai3.sock";
 
@@ -111,19 +112,40 @@ i3.open().then(() => {
     //     // reselect(opts);
     // });
     i3.on("window", (w) => {
+        if (w.change != 'focus')
+            return;
+        // console.log("got event", w);
         while (focusChain.length >= 100)
             focusChain.splice(0, 1);
         // focusChain.push({id: w.container.id, "class": w.container.window_properties["class"], title: w.container.window_properties.title});
-        if (!focusChain.length || w.container.id != focusChain[focusChain.length - 1]) {
-            isReallyFocused(w.container.id).then((visible) => {
-                if (visible) {
-                    console.log(w.container.window_properties["class"], "is visible");
-                    focusChain.push(w.container.id);
-                } else {
-                    console.log(w.class, "is not visible");
-                }
-            });
-        }
+        isReallyFocused(w.container.id).then((visible) => {
+            if (visible && !focusChain.length || (w.container.id != focusChain[focusChain.length - 1].conid)) {
+            // console.log("checking for", w.container.id, (focusChain.length ? focusChain[focusChain.length - 1].conid : "nothing"));
+
+                console.log(w.container.window_properties["class"], "is visible");
+                // if (w.container.window_properties["class"] == "XTerm") {
+                //     i3.send("GET_TREE").then((tree) => {
+                //         var matches = recurse({class: 'Netflix'}, tree);
+                //         console.log("looking for netflix", matches);
+                //         if (matches) {
+                //             matches.forEach((match) => {
+                //                 i3.send(new I3.Message("COMMAND", `[con_id=${match.id}] move to workspace 4`)).then(() => {
+                //                     i3.send(new I3.Message("COMMAND", `workspace 1`)).then(console.log);
+                //                 });
+                //             });
+                //         }
+                //     });
+                // } else if (w.container.window_properties["class"] = "Netflix") {
+                //     i3.send(new I3.Message("COMMAND", `[con_id=${w.container.id}] move to workspace 1`)).then(() => {
+                //         i3.send(new I3.Message("COMMAND", `workspace 1`)).then(console.log);
+                //     });
+                // }
+                focusChain.push({conid: w.container.id, winid: w.container.window, "class": w.container.window_properties["class"], instance: w.container.window_properties.instance});
+                // console.log(focusChain.slice(-5));
+            } else {
+                console.log(w.class, "is not visible");
+            }
+        });
         // console.log("got shit", w);
     });
     // i3.on("workspace", (w) => {
@@ -163,16 +185,20 @@ function handleApplicationMessage(msg)
                 ids[matches[i].id] = true;
             }
 
+            console.log(matches);
+
             for (var i=focusChain.length - 2; i>=0; --i) {
-                if (focusChain[i] in ids) {
-                    i3.send(new I3.Message("COMMAND", `[con_id=${focusChain[i]}] focus`)).then(console.log);
-                    console.log(`sending focus to ${focusChain[i]}`);
+                if (focusChain[i].conid in ids) {
+                    i3.send(new I3.Message("COMMAND", `[con_id=${focusChain[i].conid}] focus`)).then(console.log);
+                    console.log(`sending focus to ${focusChain[i].class}`);
+                    if (msg.output)
+                        safe.fs.writeFileSync(msg.output, `CONID=${focusChain[i].conid}\nWINID=${focusChain[i].winid}\nCLASS=${focusChain[i].class}\nINSTANCE=${focusChain[i].instance}\n`);
                     return;
                 }
             }
             console.log("Couldn't find anyone to focus");
             return;
-        } else if (matches.length) {
+        } else if (matches && matches.length) {
             let focus;
             console.log(matches);
             if (matches.length > 1) {
@@ -188,8 +214,8 @@ function handleApplicationMessage(msg)
                 if (focus === undefined) {
                     // console.log(focusChain);
                     for (let i=focusChain.length - 1; i>=0; --i) {
-                        if (focusChain[i] in ids) {
-                            focus = focusChain[i];
+                        if (focusChain[i].conid in ids) {
+                            focus = focusChain[i].conid;
                             break;
                         }
                     }
@@ -307,3 +333,16 @@ client.on('connect', function() {
     client.write(JSON.stringify({type: 'quit'}) + "\n");
     client.pipe(client);
 });
+
+var rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout,
+  terminal: false
+});
+
+rl.on('line', function(line) {
+    if (line == "focuschain") {
+        console.log(JSON.stringify(focusChain, null, 4));
+    }
+    // console.log("got line", line, "shit");
+})
